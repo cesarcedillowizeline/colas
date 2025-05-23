@@ -1,0 +1,40 @@
+# Entorno virtual
+.venv/
+venv/
+
+# Archivos de salida
+output/
+*.log
+
+# Archivos del sistema
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+.DS_Store
+Thumbs.db
+
+# Configuraciones de entorno/IDE
+.vscode/
+.idea/
+
+# Archivos temporales
+*.tmp
+*.bak
+*.old
+
+# Entornos de pruebas
+.env
+.env.*
+
+# Archivos creados por pip
+pip-log.txt
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Archivos de configuracion
+config/
