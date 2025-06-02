@@ -61,110 +61,99 @@ def main():
             print(f"Error al consultar la API de RabbitMQ: {e}")
             return
 
-    try:
-        credentials = pika.PlainCredentials(config['USERNAME'], config['PASSWORD'])
-        connection = pika.BlockingConnection(pika.ConnectionParameters(
-            host=config['RABBITMQ_HOST'],
-            port=5672,
-            credentials=credentials,
-            heartbeat=600,
-            blocked_connection_timeout=300
-        ))
-        channel = connection.channel()
+    # Obtener total de mensajes usando API HTTP
+    cola_url = f"http://{config['RABBITMQ_HOST']}:15672/api/queues/%2F/{queue_name}"
+    response = requests.get(cola_url, auth=HTTPBasicAuth(config['USERNAME'], config['PASSWORD']))
+    total_messages = response.json().get("messages", 0)
 
-        # Obtener cantidad total de mensajes
-        queue = channel.queue_declare(queue=queue_name, passive=True)
-        total_messages = queue.method.message_count
+    # Determinar opciones según tamaño
+    limites = []
+    if total_messages <= 1000:
+        limites = [100, total_messages]
+    elif total_messages <= 5000:
+        limites = [100, 1000, total_messages]
+    elif total_messages <= 10000:
+        limites = [100, 1000, 3000, total_messages]
+    else:
+        limites = [100, 1000, 3000, 10000, total_messages]
 
-        # Determinar opciones según tamaño
-        limites = []
-        if total_messages <= 1000:
-            limites = [100, total_messages]
-        elif total_messages <= 5000:
-            limites = [100, 1000, total_messages]
-        elif total_messages <= 10000:
-            limites = [100, 1000, 3000, total_messages]
-        else:
-            limites = [100, 1000, 3000, 10000, total_messages]
+    print(f"La cola '{queue_name}' contiene {total_messages} mensajes.")
+    print("Cuántos deseas exportar?")
+    for i, val in enumerate(limites, 1):
+        etiqueta = f"{val}" if val != total_messages else "todos"
+        print(f"{i}. {etiqueta}")
 
-        # Mostrar opciones
-        print(f"La cola '{queue_name}' contiene {total_messages} mensajes.")
-        print("Cuántos deseas exportar?")
-        for i, val in enumerate(limites, 1):
-            etiqueta = f"{val}" if val != total_messages else "todos"
-            print(f"{i}. {etiqueta}")
+    opcion = input("Selecciona una opción por número: ").strip()
+    if not opcion.isdigit() or not (1 <= int(opcion) <= len(limites)):
+        print("Opción no válida. Cancelando.")
+        return
 
-        opcion = input("Selecciona una opción por número: ").strip()
-        if not opcion.isdigit() or not (1 <= int(opcion) <= len(limites)):
-            print("Opción no válida. Cancelando.")
-            return
+    max_mensajes = limites[int(opcion) - 1]
+    print(f"\n🔽 Exportando {max_mensajes} mensaje(s) de '{queue_name}'...\n")
 
-        max_mensajes = limites[int(opcion) - 1]
-        print(f"\n🔽 Exportando {max_mensajes} mensaje(s) de '{queue_name}'...\n")
+    url_get = f"http://{config['RABBITMQ_HOST']}:15672/api/queues/%2F/{queue_name}/get"
+    auth = HTTPBasicAuth(config['USERNAME'], config['PASSWORD'])
 
-        messages = []
-        contador = 0
+    messages = []
+    obtenidos = 0
+    batch_size = 50
 
-        with tqdm(total=min(total_messages, max_mensajes), unit="msg") as pbar:
-            while contador < max_mensajes:
-                method_frame, properties, body = channel.basic_get(queue=queue_name, auto_ack=False)
-                if not method_frame:
-                    break
+    with tqdm(total=max_mensajes, unit="msg") as pbar:
+        while obtenidos < max_mensajes:
+            count = min(batch_size, max_mensajes - obtenidos)
+            body = {
+                "count": count,
+                "ackmode": "ack_requeue_true",
+                "encoding": "auto",
+                "truncate": 50000
+            }
+            resp = requests.post(url_get, json=body, auth=auth)
+            if resp.status_code != 200:
+                print(f"Error al obtener mensajes: {resp.status_code}")
+                break
 
-                exchange_from_xdeath = "N/A"
-                queue_from_xdeath = "N/A"
-                time_from_xdeath = "N/A"
-                toppic = None
+            lote = resp.json()
+            if not lote:
+                break
 
-                try:
-                    if properties.headers and "x-death" in properties.headers:
-                        x_death_list = properties.headers["x-death"]
-                        if isinstance(x_death_list, list) and len(x_death_list) > 0:
-                            first_x_death = x_death_list[0]
-                            exchange_from_xdeath = first_x_death.get("exchange", "N/A")
-                            queue_from_xdeath = first_x_death.get("queue", "N/A")
-                            unix_time = first_x_death.get("time")
-                            toppic = first_x_death.get("routing-keys")
-                            if isinstance(unix_time, datetime.datetime):
-                                time_from_xdeath = unix_time.strftime('%Y-%m-%d %H:%M:%S')
-                            else:
-                                time_from_xdeath = datetime.datetime.fromtimestamp(unix_time).strftime('%Y-%m-%d %H:%M:%S')
-                except Exception as e:
-                    print(f"Error al procesar x-death: {e}")
+            for item in lote:
+                x_death = item.get("properties", {}).get("headers", {}).get("x-death", [])
+                if x_death:
+                    x_info = x_death[0]
+                    exchange = x_info.get("exchange", "N/A")
+                    queue_from = x_info.get("queue", "N/A")
+                    toppic = x_info.get("routing-keys", [])
+                    unix_time = x_info.get("time")
+                    if isinstance(unix_time, int):
+                        time_str = datetime.datetime.fromtimestamp(unix_time).strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        time_str = str(unix_time)
+                else:
+                    exchange = queue_from = time_str = "N/A"
+                    toppic = []
 
                 messages.append({
-                    "queue": queue_from_xdeath,
-                    "exchange_from_xdeath": exchange_from_xdeath,
-                    "time_from_xdeath": time_from_xdeath,
+                    "queue": queue_from,
+                    "exchange_from_xdeath": exchange,
+                    "time_from_xdeath": time_str,
                     "toppic": toppic,
-                    "message": body.decode('utf-8')
+                    "message": item.get("payload", "")
                 })
 
-                contador += 1
-                pbar.update(1)
+            obtenidos += len(lote)
+            pbar.update(len(lote))
 
-        output_dir = os.path.join(os.path.dirname(__file__), '..', 'output')
-        os.makedirs(output_dir, exist_ok=True)
+    output_dir = os.path.join(os.path.dirname(__file__), '..', 'output')
+    os.makedirs(output_dir, exist_ok=True)
 
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_filename = f"{queue_name}_{max_mensajes}_{timestamp}.json"
-        output_path = os.path.join(output_dir, output_filename)
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_filename = f"{queue_name}_{max_mensajes}_{timestamp}.json"
+    output_path = os.path.join(output_dir, output_filename)
 
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(messages, f, ensure_ascii=False, indent=4)
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(messages, f, ensure_ascii=False, indent=4)
 
-        print(f"\n✅ Descargados {len(messages)} mensajes. Guardados en:\n{output_path}")
-
-    except pika.exceptions.AMQPConnectionError as e:
-        print(f"❌ Error de conexión a RabbitMQ: {e}")
-    except Exception as e:
-        print(f"❌ Error inesperado: {e}")
-    finally:
-        try:
-            if 'connection' in locals() and connection.is_open:
-                connection.close()
-        except Exception as e:
-            print(f"⚠️ Error al cerrar la conexión: {e}")
+    print(f"\n✅ Descargados {len(messages)} mensajes. Guardados en:\n{output_path}")
 
 if __name__ == "__main__":
     main()
