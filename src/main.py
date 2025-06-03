@@ -45,10 +45,6 @@ def main():
             for i, (nombre, total) in enumerate(colas_filtradas, 1):
                 print(f"{i}. {nombre} ({total} mensajes)")
 
-            respuesta = input("\n¿Quieres exportar los mensajes de alguna de estas colas? (s/n): ").strip().lower()
-            if respuesta != 's':
-                return
-
             indice = input("Introduce el número de la cola que deseas exportar: ").strip()
             if not indice.isdigit() or not (1 <= int(indice) <= len(colas_filtradas)):
                 print("Índice no válido.")
