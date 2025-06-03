@@ -1,4 +1,4 @@
-import json
+import json 
 import pika
 import datetime
 import sys
@@ -152,4 +152,7 @@ def main():
     print(f"\n✅ Descargados {len(messages)} mensajes. Guardados en:\n{output_path}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n⛔ Ejecución interrumpida por el usuario. Saliendo...")
