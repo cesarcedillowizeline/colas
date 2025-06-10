@@ -16,6 +16,31 @@ def cargar_config(entorno):
     with open(ruta, 'r', encoding='utf-8') as f:
         return json.load(f)
 
+def crear_cola_nueva_y_mover_mensajes(config, queue_name, mensajes):
+    fecha_suffix = datetime.datetime.now().strftime('%d%m%y')
+    nueva_cola = f"{queue_name}_{fecha_suffix}"
+    credentials = pika.PlainCredentials(config['USERNAME'], config['PASSWORD'])
+    connection = pika.BlockingConnection(
+        pika.ConnectionParameters(host=config['RABBITMQ_HOST'], credentials=credentials)
+    )
+    channel = connection.channel()
+
+    # Crear la nueva cola si no existe
+    channel.queue_declare(queue=nueva_cola, durable=True)
+
+    print(f"\n➡️  Copiando mensajes a la nueva cola: {nueva_cola}\n")
+
+    for mensaje in mensajes:
+        body = mensaje.get("message", "")
+        channel.basic_publish(
+            exchange='',
+            routing_key=nueva_cola,
+            body=body.encode('utf-8') if isinstance(body, str) else body
+        )
+
+    connection.close()
+    print(f"\n✅ Mensajes copiados a la cola: {nueva_cola}")
+
 def main():
     if len(sys.argv) != 3:
         print("Uso: python main.py [entorno: dev|qa|prod] [nombre_cola|listar]")
@@ -98,9 +123,10 @@ def main():
     obtenidos = 0
     batch_size = 50
     first = True
+    mensajes_guardados = []
 
     with open(output_path, 'w', encoding='utf-8') as f_out:
-        f_out.write('[\n')  # Abrir lista JSON
+        f_out.write('[\n')
 
         with tqdm(total=max_mensajes, unit="msg") as pbar:
             while obtenidos < max_mensajes:
@@ -144,6 +170,8 @@ def main():
                         "message": item.get("payload", "")
                     }
 
+                    mensajes_guardados.append(mensaje)
+
                     if not first:
                         f_out.write(',\n')
                     f_out.write(json.dumps(mensaje, ensure_ascii=False, indent=4))
@@ -152,9 +180,12 @@ def main():
                 obtenidos += len(lote)
                 pbar.update(len(lote))
 
-        f_out.write('\n]')  # Cierra lista JSON
+        f_out.write('\n]')
 
     print(f"\n✅ Descargados {obtenidos} mensajes. Guardados en:\n{output_path}")
+
+    if mensajes_guardados:
+        crear_cola_nueva_y_mover_mensajes(config, queue_name, mensajes_guardados)
 
 if __name__ == "__main__":
     try:
