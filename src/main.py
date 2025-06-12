@@ -15,14 +15,50 @@ def cargar_config(entorno):
 
     with open(ruta, 'r', encoding='utf-8') as f:
         return json.load(f)
+    
+def purgar_cola(config, queue_name):
+    print(f"\n⚠️  Purgando cola: {queue_name} ...")
+    url = f"http://{config['RABBITMQ_HOST']}:15672/api/queues/%2F/{queue_name}/contents"
+    response = requests.delete(url, auth=HTTPBasicAuth(config['USERNAME'], config['PASSWORD']))
+    if response.status_code == 204:
+        print(f"✅ Cola '{queue_name}' purgada correctamente.")
+    else:
+        print(f"❌ Error al purgar la cola '{queue_name}': {response.status_code} - {response.text}")    
+
+def crear_cola_nueva_y_mover_mensajes(config, queue_name, mensajes):
+    fecha_suffix = datetime.datetime.now().strftime('%d%m%y')
+    nueva_cola = f"{queue_name}_{fecha_suffix}"
+    credentials = pika.PlainCredentials(config['USERNAME'], config['PASSWORD'])
+    connection = pika.BlockingConnection(
+        pika.ConnectionParameters(host=config['RABBITMQ_HOST'], credentials=credentials)
+    )
+    channel = connection.channel()
+
+    # Crear la nueva cola si no existe
+    channel.queue_declare(queue=nueva_cola, durable=True)
+
+    print(f"\n➡️  Copiando mensajes a la nueva cola: {nueva_cola}\n")
+
+    for mensaje in mensajes:
+        body = mensaje.get("message", "")
+        channel.basic_publish(
+            exchange='',
+            routing_key=nueva_cola,
+            body=body.encode('utf-8') if isinstance(body, str) else body
+        )
+
+    connection.close()
+    print(f"\n✅ Mensajes copiados a la cola: {nueva_cola}")
 
 def main():
-    if len(sys.argv) != 3:
-        print("Uso: python main.py [entorno: dev|qa|prod] [nombre_cola|listar]")
+    if len(sys.argv) < 3:
+        print("Uso: python main.py [entorno: dev|qa|prod] [nombre_cola|listar] [-crear] [-purgar]")
         sys.exit(1)
 
     entorno = sys.argv[1]
     queue_name = sys.argv[2]
+    crear = "-crear" in sys.argv
+    purgar = "-purgar" in sys.argv
 
     config = cargar_config(entorno)
 
@@ -56,7 +92,7 @@ def main():
         except Exception as e:
             print(f"Error al consultar la API de RabbitMQ: {e}")
             return
-
+        
     # Obtener total de mensajes usando API HTTP
     cola_url = f"http://{config['RABBITMQ_HOST']}:15672/api/queues/%2F/{queue_name}"
     response = requests.get(cola_url, auth=HTTPBasicAuth(config['USERNAME'], config['PASSWORD']))
@@ -98,9 +134,10 @@ def main():
     obtenidos = 0
     batch_size = 50
     first = True
+    mensajes_guardados = []
 
     with open(output_path, 'w', encoding='utf-8') as f_out:
-        f_out.write('[\n')  # Abrir lista JSON
+        f_out.write('[\n')
 
         with tqdm(total=max_mensajes, unit="msg") as pbar:
             while obtenidos < max_mensajes:
@@ -144,6 +181,8 @@ def main():
                         "message": item.get("payload", "")
                     }
 
+                    mensajes_guardados.append(mensaje)
+
                     if not first:
                         f_out.write(',\n')
                     f_out.write(json.dumps(mensaje, ensure_ascii=False, indent=4))
@@ -152,12 +191,29 @@ def main():
                 obtenidos += len(lote)
                 pbar.update(len(lote))
 
-        f_out.write('\n]')  # Cierra lista JSON
+        f_out.write('\n]')
 
     print(f"\n✅ Descargados {obtenidos} mensajes. Guardados en:\n{output_path}")
+
+    if mensajes_guardados:
+        if sys.argv[2].lower() != "listar":
+            if crear:
+                crear_cola_nueva_y_mover_mensajes(config, queue_name, mensajes_guardados)
+            if purgar:
+                purgar_cola(config, queue_name)
+        else:
+            opcion_crear = input("\n¿Deseas copiar los mensajes a una nueva cola? (s/n): ").strip().lower()
+            if opcion_crear == "s":
+                crear_cola_nueva_y_mover_mensajes(config, queue_name, mensajes_guardados)
+
+            opcion_purgar = input("\n¿Deseas purgar la cola original? (s/n): ").strip().lower()
+            if opcion_purgar == "s":
+                purgar_cola(config, queue_name)
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
         print("\n⛔ Ejecución interrumpida por el usuario. Saliendo...")
+
+

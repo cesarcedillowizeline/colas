@@ -73,16 +73,18 @@ python src/main.py dev listar
 1. Muestra todas las colas que terminan en `-errores` y tienen mensajes.
 2. Te preguntará si deseas exportar alguna.
 3. Podrás elegirla por su número de índice.
+4. Podrás escoger si quieres copiar los mensajes a una cola nueva con la fecha actual como sufijo en su nombre
+5. Podrás purgar la cola original si lo deseas
 
 ### ✅ Exportar directamente una cola específica:
 
 ```bash
-python src/main.py dev nombre-de-la-cola
+python src/main.py dev nombre-de-la-cola parametros
 ```
 
 Ejemplo:
 ```bash
-python src/main.py qa dac-errores
+python src/main.py qa dac-errores -crear -purgar
 ```
 
 ---
@@ -94,6 +96,20 @@ Los mensajes se guardan automáticamente en la carpeta `output/`, con nombres co
 ```
 output/dac-errores_20250522_134501.json
 ```
+
+---
+
+## 📝 Parámetros
+
+Los parámetros permitidos son
+
+- ```-crear```
+
+Crea una cola nueva con la fecha actual como sufijo en su nombre
+
+- ```-purgar```
+
+Purga la cola original
 
 ---
 
