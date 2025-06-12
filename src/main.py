@@ -15,6 +15,15 @@ def cargar_config(entorno):
 
     with open(ruta, 'r', encoding='utf-8') as f:
         return json.load(f)
+    
+def purgar_cola(config, queue_name):
+    print(f"\n⚠️  Purgando cola: {queue_name} ...")
+    url = f"http://{config['RABBITMQ_HOST']}:15672/api/queues/%2F/{queue_name}/contents"
+    response = requests.delete(url, auth=HTTPBasicAuth(config['USERNAME'], config['PASSWORD']))
+    if response.status_code == 204:
+        print(f"✅ Cola '{queue_name}' purgada correctamente.")
+    else:
+        print(f"❌ Error al purgar la cola '{queue_name}': {response.status_code} - {response.text}")    
 
 def crear_cola_nueva_y_mover_mensajes(config, queue_name, mensajes):
     fecha_suffix = datetime.datetime.now().strftime('%d%m%y')
@@ -42,12 +51,14 @@ def crear_cola_nueva_y_mover_mensajes(config, queue_name, mensajes):
     print(f"\n✅ Mensajes copiados a la cola: {nueva_cola}")
 
 def main():
-    if len(sys.argv) != 3:
-        print("Uso: python main.py [entorno: dev|qa|prod] [nombre_cola|listar]")
+    if len(sys.argv) < 3:
+        print("Uso: python main.py [entorno: dev|qa|prod] [nombre_cola|listar] [-crear] [-purgar]")
         sys.exit(1)
 
     entorno = sys.argv[1]
     queue_name = sys.argv[2]
+    crear = "-crear" in sys.argv
+    purgar = "-purgar" in sys.argv
 
     config = cargar_config(entorno)
 
@@ -81,7 +92,7 @@ def main():
         except Exception as e:
             print(f"Error al consultar la API de RabbitMQ: {e}")
             return
-
+        
     # Obtener total de mensajes usando API HTTP
     cola_url = f"http://{config['RABBITMQ_HOST']}:15672/api/queues/%2F/{queue_name}"
     response = requests.get(cola_url, auth=HTTPBasicAuth(config['USERNAME'], config['PASSWORD']))
@@ -185,10 +196,24 @@ def main():
     print(f"\n✅ Descargados {obtenidos} mensajes. Guardados en:\n{output_path}")
 
     if mensajes_guardados:
-        crear_cola_nueva_y_mover_mensajes(config, queue_name, mensajes_guardados)
+        if sys.argv[2].lower() != "listar":
+            if crear:
+                crear_cola_nueva_y_mover_mensajes(config, queue_name, mensajes_guardados)
+            if purgar:
+                purgar_cola(config, queue_name)
+        else:
+            opcion_crear = input("\n¿Deseas copiar los mensajes a una nueva cola? (s/n): ").strip().lower()
+            if opcion_crear == "s":
+                crear_cola_nueva_y_mover_mensajes(config, queue_name, mensajes_guardados)
+
+            opcion_purgar = input("\n¿Deseas purgar la cola original? (s/n): ").strip().lower()
+            if opcion_purgar == "s":
+                purgar_cola(config, queue_name)
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
         print("\n⛔ Ejecución interrumpida por el usuario. Saliendo...")
+
+
